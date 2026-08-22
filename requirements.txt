@@ -1,0 +1,9 @@
+telethon
+beautifulsoup4
+requests
+python-dotenv
+pymongo
+dnspython
+cloudscraper
+cryptg
+aiohttp
