@@ -28,6 +28,7 @@ type Episode struct {
 
 type ShowData struct {
 	Title    string    `json:"title"`
+	Status   string    `json:"status"`
 	ImgURL   string    `json:"img_url"`
 	Episodes []Episode `json:"episodes"`
 }

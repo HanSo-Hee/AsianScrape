@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -152,6 +153,10 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 	}
 
+	if showData.Status != "" {
+		qualities["_status"] = showData.Status
+	}
+
 	if updated || !found || channelMsgID == 0 {
 		db.Global.SaveFileQualities(showID, showTitle, qualities)
 
@@ -166,14 +171,25 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 			epLine = fmt.Sprintf("🔢 <b>Episode:</b> <code>E%02d</code>\n", episodes[0].Episode)
 		}
 
-		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s%s\n👇 <b>Download Episodes via Buttons Below:</b>", showTitle, epLine, subLine)
+		statusVal, _ := qualities["_status"].(string)
+		if statusVal == "" {
+			statusVal = "Ongoing"
+		}
+		statusQuote := fmt.Sprintf("<blockquote>Status: %s</blockquote>\n", statusVal)
 
+		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s%s%s\n👇 <b>Download Episodes via Buttons Below:</b>", showTitle, epLine, subLine, statusQuote)
+
+		cleanID := regexp.MustCompile(`[^a-zA-Z0-9_]+`).ReplaceAllString(showID, "_")
 		kb := telegram.NewKeyboard()
 		sortedQs := []string{"480p", "720p", "1080p"}
 		var buttons []telegram.KeyboardButton
 		for _, q := range sortedQs {
 			if _, ok := qualities[q]; ok {
-				startURL := fmt.Sprintf("https://t.me/%s?start=batch_%s_%s", BotUsername, showID, q)
+				botUser := BotUsername
+				if botUser == "" {
+					botUser = "bot"
+				}
+				startURL := fmt.Sprintf("https://t.me/%s?start=batch_%s_%s", botUser, cleanID, q)
 				buttons = append(buttons, telegram.Button.URL("📥 "+q, startURL))
 			}
 		}
@@ -190,7 +206,7 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		if imgURL != "" && channelMsgID == 0 {
 			imgLower := strings.ToLower(imgURL)
 			if !strings.Contains(imgLower, "logo") && !strings.Contains(imgLower, "kissasia.png") {
-				localImgPath = fmt.Sprintf("poster_%s.jpg", showID)
+				localImgPath = fmt.Sprintf("poster_%s.jpg", cleanID)
 				err = downloader.DownloadSubtitle(context.Background(), imgURL, localImgPath)
 				if err != nil {
 					localImgPath = ""
@@ -198,41 +214,43 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 			}
 		}
 
-		if channelMsgID > 0 {
-			_, err = client.EditMessage(config.Global.ChannelID, channelMsgID, caption, &telegram.SendOptions{ReplyMarkup: markup})
-			if err == nil {
-				posted = true
+		if config.Global.ChannelID != "" {
+			if channelMsgID > 0 {
+				_, err = client.EditMessage(config.Global.ChannelID, channelMsgID, caption, &telegram.SendOptions{ReplyMarkup: markup})
+				if err == nil {
+					posted = true
+				} else {
+					log.Printf("Failed to edit channel message %d in channel %d: %v", channelMsgID, config.Global.ChannelID, err)
+				}
 			} else {
-				log.Printf("Failed to edit channel message %d in channel %d: %v", channelMsgID, config.Global.ChannelID, err)
-			}
-		} else {
-			var sentMsg *telegram.NewMessage
-			if localImgPath != "" {
-				sentMsg, err = client.SendMedia(config.Global.ChannelID, localImgPath, &telegram.MediaOptions{
-					Caption:     caption,
-					ReplyMarkup: markup,
-				})
-				_ = os.Remove(localImgPath)
-			}
+				var sentMsg *telegram.NewMessage
+				if localImgPath != "" {
+					sentMsg, err = client.SendMedia(config.Global.ChannelID, localImgPath, &telegram.MediaOptions{
+						Caption:     caption,
+						ReplyMarkup: markup,
+					})
+					_ = os.Remove(localImgPath)
+				}
 
-			if sentMsg == nil {
-				sentMsg, err = client.SendMessage(config.Global.ChannelID, caption, &telegram.SendOptions{ReplyMarkup: markup})
-			}
+				if sentMsg == nil {
+					sentMsg, err = client.SendMessage(config.Global.ChannelID, caption, &telegram.SendOptions{ReplyMarkup: markup})
+				}
 
-			if err == nil && sentMsg != nil {
-				channelMsgID = sentMsg.ID
-				qualities["_channel_msg_id"] = channelMsgID
-				db.Global.SaveFileQualities(showID, showTitle, qualities)
-				posted = true
-			} else {
-				log.Printf("Failed to post card to channel %d: %v", config.Global.ChannelID, err)
+				if err == nil && sentMsg != nil {
+					channelMsgID = sentMsg.ID
+					qualities["_channel_msg_id"] = channelMsgID
+					db.Global.SaveFileQualities(showID, showTitle, qualities)
+					posted = true
+				} else {
+					log.Printf("Failed to post card to channel %d: %v", config.Global.ChannelID, err)
+				}
 			}
 		}
 
 		if posted {
 			_, _ = client.EditMessage(replyToChatID, statusMsgID, fmt.Sprintf("<b>Scrape & Upload complete for %s!</b>\nDelivering episode files...", showTitle))
 		} else {
-			log.Printf("Notice: Channel post card could not be sent to channel ID %d. Verify bot admin permissions.", config.Global.ChannelID)
+			log.Printf("Notice: Channel card was not sent to channel ID %d (Verify CHANNEL_ID env var & bot admin rights).", config.Global.ChannelID)
 		}
 	}
 

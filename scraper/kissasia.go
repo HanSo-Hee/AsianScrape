@@ -266,8 +266,15 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		}
 	}
 
+	status := "Ongoing"
+	docText := strings.ToLower(doc.Text())
+	if strings.Contains(docText, "status: completed") || strings.Contains(docText, "status: complete") || strings.Contains(strings.ToLower(title), "complete") {
+		status = "Completed"
+	}
+
 	return &ShowData{
 		Title:    title,
+		Status:   status,
 		ImgURL:   imgURL,
 		Episodes: episodes,
 	}, nil
