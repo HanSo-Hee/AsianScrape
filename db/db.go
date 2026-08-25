@@ -11,6 +11,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"regexp"
+	"strings"
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -80,23 +82,25 @@ func (d *Database) initSQLite() {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			item_url TEXT UNIQUE,
 			title TEXT,
-			posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)`,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 		`CREATE TABLE IF NOT EXISTS file_store (
 			id TEXT PRIMARY KEY,
 			title TEXT,
-			qualities TEXT
-		)`,
+			qualities TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 		`CREATE TABLE IF NOT EXISTS peers (
 			id INTEGER PRIMARY KEY,
 			access_hash INTEGER,
-			type TEXT
-		)`,
+			username TEXT
+		);`,
 	}
+
 	for _, q := range queries {
 		_, err := d.sqliteDB.Exec(q)
 		if err != nil {
-			log.Fatalf("Failed to initialize SQLite: %v", err)
+			log.Fatalf("Failed to init SQLite schema: %v", err)
 		}
 	}
 }
@@ -106,13 +110,10 @@ func (d *Database) IsPosted(itemURL string) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		count, err := d.postedCol.CountDocuments(ctx, bson.M{"item_url": itemURL})
-		if err != nil {
-			return false
-		}
-		return count > 0
+		return err == nil && count > 0
 	} else {
-		var exists int
-		err := d.sqliteDB.QueryRow("SELECT 1 FROM posted_items WHERE item_url = ?", itemURL).Scan(&exists)
+		var id int
+		err := d.sqliteDB.QueryRow("SELECT id FROM posted_items WHERE item_url = ?", itemURL).Scan(&id)
 		return err == nil
 	}
 }
@@ -122,7 +123,7 @@ func (d *Database) MarkPosted(itemURL string, title string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		opts := options.Update().SetUpsert(true)
-		_, err := d.postedCol.UpdateOne(ctx, bson.M{"item_url": itemURL}, bson.M{"$set": bson.M{"item_url": itemURL, "title": title}}, opts)
+		_, err := d.postedCol.UpdateOne(ctx, bson.M{"item_url": itemURL}, bson.M{"$set": bson.M{"title": title}}, opts)
 		if err != nil {
 			log.Printf("DB Error MarkPosted: %v", err)
 		}
@@ -134,18 +135,23 @@ func (d *Database) MarkPosted(itemURL string, title string) {
 	}
 }
 
+func normalizeID(fileID string) string {
+	return regexp.MustCompile(`[^a-zA-Z0-9]+`).ReplaceAllString(strings.ToLower(fileID), "_")
+}
+
 func (d *Database) SaveFileQualities(fileID string, title string, qualities map[string]interface{}) {
+	normKey := normalizeID(fileID)
 	if d.useMongo {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		opts := options.Update().SetUpsert(true)
-		_, err := d.fileStoreCol.UpdateOne(ctx, bson.M{"_id": fileID}, bson.M{"$set": bson.M{"title": title, "qualities": qualities}}, opts)
+		_, err := d.fileStoreCol.UpdateOne(ctx, bson.M{"_id": normKey}, bson.M{"$set": bson.M{"title": title, "qualities": qualities}}, opts)
 		if err != nil {
 			log.Printf("DB Error SaveFileQualities: %v", err)
 		}
 	} else {
 		qualitiesBytes, _ := json.Marshal(qualities)
-		_, err := d.sqliteDB.Exec("INSERT OR REPLACE INTO file_store (id, title, qualities) VALUES (?, ?, ?)", fileID, title, string(qualitiesBytes))
+		_, err := d.sqliteDB.Exec("INSERT OR REPLACE INTO file_store (id, title, qualities) VALUES (?, ?, ?)", normKey, title, string(qualitiesBytes))
 		if err != nil {
 			log.Printf("DB Error SaveFileQualities: %v", err)
 		}
@@ -153,79 +159,34 @@ func (d *Database) SaveFileQualities(fileID string, title string, qualities map[
 }
 
 func (d *Database) GetFileQualities(fileID string) (string, map[string]interface{}, bool) {
-	if d.useMongo {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var result bson.M
-		err := d.fileStoreCol.FindOne(ctx, bson.M{"_id": fileID}).Decode(&result)
-		if err != nil {
-			return "", nil, false
-		}
-		title, _ := result["title"].(string)
-		qualities := make(map[string]interface{})
-		if qRaw, ok := result["qualities"]; ok {
-			b, err := json.Marshal(qRaw)
+	keysToTry := []string{normalizeID(fileID), fileID, strings.ReplaceAll(fileID, "_", " ")}
+	for _, key := range keysToTry {
+		if d.useMongo {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var result bson.M
+			err := d.fileStoreCol.FindOne(ctx, bson.M{"_id": key}).Decode(&result)
+			cancel()
 			if err == nil {
-				_ = json.Unmarshal(b, &qualities)
+				title, _ := result["title"].(string)
+				qualities := make(map[string]interface{})
+				if qRaw, ok := result["qualities"]; ok {
+					b, err := json.Marshal(qRaw)
+					if err == nil {
+						_ = json.Unmarshal(b, &qualities)
+					}
+				}
+				return title, qualities, true
+			}
+		} else {
+			var title string
+			var qualitiesStr string
+			err := d.sqliteDB.QueryRow("SELECT title, qualities FROM file_store WHERE id = ?", key).Scan(&title, &qualitiesStr)
+			if err == nil {
+				var qualities map[string]interface{}
+				_ = json.Unmarshal([]byte(qualitiesStr), &qualities)
+				return title, qualities, true
 			}
 		}
-		return title, qualities, true
-	} else {
-		var title string
-		var qualitiesStr string
-		err := d.sqliteDB.QueryRow("SELECT title, qualities FROM file_store WHERE id = ?", fileID).Scan(&title, &qualitiesStr)
-		if err != nil {
-			return "", nil, false
-		}
-		var qualities map[string]interface{}
-		_ = json.Unmarshal([]byte(qualitiesStr), &qualities)
-		return title, qualities, true
 	}
-}
-
-func (d *Database) SavePeer(peerID int64, accessHash int64, peerType string) {
-	if d.useMongo {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		opts := options.Update().SetUpsert(true)
-		_, err := d.peerStoreCol.UpdateOne(ctx, bson.M{"_id": peerID}, bson.M{"$set": bson.M{"access_hash": accessHash, "type": peerType}}, opts)
-		if err != nil {
-			log.Printf("DB Error SavePeer: %v", err)
-		}
-	} else {
-		_, err := d.sqliteDB.Exec("INSERT OR REPLACE INTO peers (id, access_hash, type) VALUES (?, ?, ?)", peerID, accessHash, peerType)
-		if err != nil {
-			log.Printf("DB Error SavePeer: %v", err)
-		}
-	}
-}
-
-func (d *Database) GetPeer(peerID int64) (int64, string, bool) {
-	if d.useMongo {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var result bson.M
-		err := d.peerStoreCol.FindOne(ctx, bson.M{"_id": peerID}).Decode(&result)
-		if err != nil {
-			return 0, "", false
-		}
-		var accessHash int64
-		if ah, ok := result["access_hash"].(int64); ok {
-			accessHash = ah
-		} else if ah, ok := result["access_hash"].(int32); ok {
-			accessHash = int64(ah)
-		} else if ah, ok := result["access_hash"].(float64); ok {
-			accessHash = int64(ah)
-		}
-		peerType, _ := result["type"].(string)
-		return accessHash, peerType, true
-	} else {
-		var accessHash int64
-		var peerType string
-		err := d.sqliteDB.QueryRow("SELECT access_hash, type FROM peers WHERE id = ?", peerID).Scan(&accessHash, &peerType)
-		if err != nil {
-			return 0, "", false
-		}
-		return accessHash, peerType, true
-	}
+	return "", nil, false
 }
