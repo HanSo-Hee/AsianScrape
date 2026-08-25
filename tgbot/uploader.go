@@ -119,9 +119,27 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 	}
 
 	subLine := ""
-	if item.Subtitles != "" {
+	var subLangs []string
+	if len(item.SubtitleTracks) > 0 {
+		for _, tr := range item.SubtitleTracks {
+			if tr.Language != "" {
+				subLangs = append(subLangs, tr.Language)
+			}
+		}
+	} else if len(subInputs) > 0 {
+		for _, sIn := range subInputs {
+			if sIn.Language != "" {
+				subLangs = append(subLangs, sIn.Language)
+			}
+		}
+	}
+
+	if len(subLangs) > 0 {
+		subLine = fmt.Sprintf("🌐 <b>Subtitles:</b> <code>%s</code>\n", strings.Join(subLangs, ", "))
+	} else if item.Subtitles != "" {
 		subLine = fmt.Sprintf("🌐 <b>Subtitles:</b> <code>%s</code>\n", item.Subtitles)
 	}
+
 	caption := fmt.Sprintf("📁 <b>File:</b> <code>%s</code>\n🎬 <b>Title:</b> <code>%s</code>\n🔢 <b>Episode:</b> <code>E%02d</code>\n💿 <b>Quality:</b> <code>%s</code>\n%s\n⚡ <b>Uploaded By:</b> @MoviesFlixers_DL", localFilename, showTitle, epNum, quality, subLine)
 
 	var sentMsg *telegram.NewMessage

@@ -30,7 +30,7 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 	}
 
-	statusMsg, err := client.SendMessage(replyToChatID, "<b>Processing link and checking DB... Please wait.</b>", sendOpt)
+	statusMsg, err := client.SendMessage(replyToChatID, "<b>Processing link... Please wait.</b>", sendOpt)
 	if err != nil {
 		log.Printf("Failed to send status message: %v", err)
 		return
@@ -90,7 +90,19 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 				continue
 			}
 
-			if epItem.Subtitles != "" {
+			if len(epItem.SubtitleTracks) > 0 {
+				var langs []string
+				for _, tr := range epItem.SubtitleTracks {
+					if tr.Language != "" {
+						langs = append(langs, tr.Language)
+					}
+				}
+				if len(langs) > 0 {
+					qualities["_subtitles"] = strings.Join(langs, ", ")
+				} else if epItem.Subtitles != "" {
+					qualities["_subtitles"] = epItem.Subtitles
+				}
+			} else if epItem.Subtitles != "" {
 				qualities["_subtitles"] = epItem.Subtitles
 			}
 
