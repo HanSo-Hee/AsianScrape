@@ -140,7 +140,19 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 	}
 
-	if updated || !found {
+	channelMsgIDRaw, hasMsg := qualities["_channel_msg_id"]
+	var channelMsgID int32
+	if hasMsg {
+		if f, ok := channelMsgIDRaw.(float64); ok {
+			channelMsgID = int32(f)
+		} else if i, ok := channelMsgIDRaw.(int32); ok {
+			channelMsgID = i
+		} else if i, ok := channelMsgIDRaw.(int); ok {
+			channelMsgID = int32(i)
+		}
+	}
+
+	if updated || !found || channelMsgID == 0 {
 		db.Global.SaveFileQualities(showID, showTitle, qualities)
 
 		subtitles, _ := qualities["_subtitles"].(string)
@@ -173,17 +185,6 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 
 		posted := false
-		channelMsgIDRaw, hasMsg := qualities["_channel_msg_id"]
-		var channelMsgID int32
-		if hasMsg {
-			if f, ok := channelMsgIDRaw.(float64); ok {
-				channelMsgID = int32(f)
-			} else if i, ok := channelMsgIDRaw.(int32); ok {
-				channelMsgID = i
-			} else if i, ok := channelMsgIDRaw.(int); ok {
-				channelMsgID = int32(i)
-			}
-		}
 
 		localImgPath := ""
 		if imgURL != "" && channelMsgID == 0 {
@@ -201,6 +202,8 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 			_, err = client.EditMessage(config.Global.ChannelID, channelMsgID, caption, &telegram.SendOptions{ReplyMarkup: markup})
 			if err == nil {
 				posted = true
+			} else {
+				log.Printf("Failed to edit channel message %d in channel %d: %v", channelMsgID, config.Global.ChannelID, err)
 			}
 		} else {
 			var sentMsg *telegram.NewMessage
@@ -216,16 +219,20 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 				sentMsg, err = client.SendMessage(config.Global.ChannelID, caption, &telegram.SendOptions{ReplyMarkup: markup})
 			}
 
-			if err == nil {
+			if err == nil && sentMsg != nil {
 				channelMsgID = sentMsg.ID
 				qualities["_channel_msg_id"] = channelMsgID
 				db.Global.SaveFileQualities(showID, showTitle, qualities)
 				posted = true
+			} else {
+				log.Printf("Failed to post card to channel %d: %v", config.Global.ChannelID, err)
 			}
 		}
 
 		if posted {
 			_, _ = client.EditMessage(replyToChatID, statusMsgID, fmt.Sprintf("<b>Scrape & Upload complete for %s!</b>\nDelivering episode files...", showTitle))
+		} else {
+			log.Printf("Notice: Channel post card could not be sent to channel ID %d. Verify bot admin permissions.", config.Global.ChannelID)
 		}
 	}
 
