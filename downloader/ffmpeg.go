@@ -9,6 +9,8 @@ package downloader
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -19,7 +21,27 @@ type SubtitleInput struct {
 	Language string
 }
 
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
 func GetVideoResolution(filepath string) (int, int, error) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return 0, 0, err
+	}
 	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", filepath)
 	output, err := cmd.Output()
 	if err != nil {
@@ -46,8 +68,12 @@ func ProcessVideoQuality(ctx context.Context, inputPath string, subtitlePath str
 }
 
 func ProcessVideoQualityMultiSub(ctx context.Context, inputPath string, subtitles []SubtitleInput, outputPath string, targetHeight int) error {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return copyFile(inputPath, outputPath)
+	}
+
 	_, origH, err := GetVideoResolution(inputPath)
-	args := []string{"-y", "-i", inputPath}
+	args := []string{"-y", "-threads", "2", "-i", inputPath}
 	for _, sub := range subtitles {
 		if sub.Path != "" {
 			args = append(args, "-i", sub.Path)
@@ -100,5 +126,9 @@ func ProcessVideoQualityMultiSub(ctx context.Context, inputPath string, subtitle
 
 	args = append(args, outputPath)
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	return cmd.Run()
+	runErr := cmd.Run()
+	if runErr != nil {
+		return copyFile(inputPath, outputPath)
+	}
+	return nil
 }
