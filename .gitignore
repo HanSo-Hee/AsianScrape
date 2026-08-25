@@ -1,76 +1,26 @@
-# ==========================================
-# Byte-compiled / optimized / DLL files
-# ==========================================
-__pycache__/
-*.py[cod]
-*$py.class
+# Build output
+main
+asianscraper
+app
+*.exe
+*.dll
+*.so
+*.dylib
 
-# ==========================================
-# Virtual Environments (Highly Recommended)
-# ==========================================
-.venv/
-venv/
-ENV/
-env/
-ActiveEnv.venv/
+# Media and Database
+*.db
+dramas.db
+temp_*
+poster_*
+*.mkv
+*.mp4
+*.vtt
+*.srt
 
-# ==========================================
-# Distribution / Packaging / Build Artifacts
-# ==========================================
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# ==========================================
-# Jupyter Notebooks Checkpoints
-# ==========================================
-.ipynb_checkpoints
-
-# ==========================================
-# Testing and Coverage
-# ==========================================
-htmlcov/
-.toml
-.cache
-.pytest_cache/
-.htmlcov/
-.coverage
-.coverage.*
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-
-# ==========================================
-# Environment Variables & Secrets (CRITICAL)
-# ==========================================
+# Secrets and Local Env
 .env
 .env.local
-.env.*
-.secrets
-+.env
 
-# ==========================================
-# IDEs and Editors (Optional but helpful)
-# ==========================================
+# IDE
 .vscode/
 .idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.swp
