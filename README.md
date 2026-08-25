@@ -49,20 +49,33 @@ PORT=8080
 
 ---
 
-## 🚀 Deployment
+## 🚀 Koyeb Deployment Instructions
 
-### Option 1: Local / VPS Execution
-```bash
-go build -o app main.go
-./app
-```
+### Method 1: Docker Deployment (Recommended)
+This repository includes an optimized multi-stage `Dockerfile` with `ffmpeg` built-in.
 
-### Option 2: Koyeb / Docker Deployment
-This repository includes a production-ready `Dockerfile`.
-1. Push the repository to GitHub.
-2. Connect your repository in [Koyeb](https://koyeb.com).
-3. Select **Docker** build mode and set the container port to `8080`.
-4. Add your Environment Variables and deploy!
+1. Create a new Service on **[Koyeb](https://app.koyeb.com/)**.
+2. Select **GitHub** as deployment source and choose your repository.
+3. In **Builder type**, select **Docker**.
+4. Configure Dashboard Overrides:
+   - **Dockerfile**: `Dockerfile`
+   - **Build command**: *(Leave blank - auto-handled by Dockerfile)*
+   - **Run command**: *(Leave blank - auto-handled by Dockerfile)*
+   - **Work directory**: *(Leave blank / `/app`)*
+5. Configure Environment Variables & Health Checks:
+   - **Port**: `8080`
+   - **Health check path**: `/health` (HTTP)
+   - Add all environment variables listed in `.env.example`.
+
+---
+
+### Method 2: Buildpack Deployment (Alternative)
+If using Koyeb's Buildpack builder instead of Docker:
+- **Build command**: `go build -o app main.go`
+- **Run command**: `./app`
+- **Work directory**: `/`
+- **Port**: `8080`
+- **Health check path**: `/health`
 
 ---
 
