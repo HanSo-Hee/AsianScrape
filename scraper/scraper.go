@@ -26,12 +26,12 @@ func ScrapeShowData(showURL string, source string) (*ShowData, error) {
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	switch source {
-	case "DramaKey":
+	switch strings.ToLower(source) {
+	case "dramakey":
 		return ScrapeDramaKey(doc, showURL, targetEpNum)
-	case "KissAsia":
+	case "kissasia":
 		return ScrapeKissAsia(doc, showURL, targetEpNum)
-	case "DramaCool":
+	case "dramacool":
 		return ScrapeDramaCool(doc, showURL, targetEpNum)
 	}
 
