@@ -237,3 +237,29 @@ func startHandler(client *telegram.Client, chatID int64, param string) {
 
 	sendWelcomeMessage(client, chatID)
 }
+
+func deleteShowHandler(client *telegram.Client, chatID int64, param string) {
+	param = strings.TrimSpace(param)
+	if param == "" {
+		_, _ = client.SendMessage(chatID, "<b>Usage:</b> <code>/delete &lt;show_name_or_url&gt;</code>\n<i>Example: /delete teach you a lesson</i>")
+		return
+	}
+
+	cleanTitle := param
+	if idx := strings.Index(cleanTitle, "#"); idx != -1 {
+		cleanTitle = cleanTitle[:idx]
+	}
+	cleanTitle = strings.TrimPrefix(cleanTitle, "https://")
+	cleanTitle = strings.TrimPrefix(cleanTitle, "http://")
+	if strings.Contains(cleanTitle, "/") {
+		parts := strings.Split(strings.Trim(cleanTitle, "/"), "/")
+		cleanTitle = parts[len(parts)-1]
+	}
+
+	deleted := db.Global.DeleteShow(cleanTitle)
+	if deleted {
+		_, _ = client.SendMessage(chatID, fmt.Sprintf("✅ <b>Successfully deleted database records for '%s'!</b>\n\nYou can now send the drama URL to re-scrape and re-upload cleanly.", param))
+	} else {
+		_, _ = client.SendMessage(chatID, fmt.Sprintf("⚠️ <b>No matching database records found for '%s'.</b>", param))
+	}
+}

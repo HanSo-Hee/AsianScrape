@@ -93,6 +93,16 @@ func StartBot(ctx context.Context) {
 			return nil
 		}
 
+		if strings.HasPrefix(text, "/delete") || strings.HasPrefix(text, "/delshow") || strings.HasPrefix(text, "/del") {
+			parts := strings.SplitN(text, " ", 2)
+			param := ""
+			if len(parts) > 1 {
+				param = strings.TrimSpace(parts[1])
+			}
+			deleteShowHandler(client, chatID, param)
+			return nil
+		}
+
 		if strings.HasPrefix(text, "/genlink") {
 			parts := strings.Fields(text)
 			if len(parts) < 2 {

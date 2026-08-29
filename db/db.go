@@ -190,3 +190,32 @@ func (d *Database) GetFileQualities(fileID string) (string, map[string]interface
 	}
 	return "", nil, false
 }
+
+func (d *Database) DeleteShow(fileID string) bool {
+	normKey := normalizeID(fileID)
+	keysToTry := []string{normKey, fileID, strings.ReplaceAll(fileID, "_", " ")}
+	deleted := false
+
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, k := range keysToTry {
+			res, err := d.fileStoreCol.DeleteOne(ctx, bson.M{"_id": k})
+			if err == nil && res.DeletedCount > 0 {
+				deleted = true
+			}
+			_, _ = d.postedCol.DeleteMany(ctx, bson.M{"item_url": bson.M{"$regex": k, "$options": "i"}})
+		}
+	} else {
+		for _, k := range keysToTry {
+			res, err := d.sqliteDB.Exec("DELETE FROM file_store WHERE id = ?", k)
+			if err == nil {
+				if n, _ := res.RowsAffected(); n > 0 {
+					deleted = true
+				}
+			}
+			_, _ = d.sqliteDB.Exec("DELETE FROM posted_items WHERE item_url LIKE ? OR title LIKE ?", "%"+k+"%", "%"+k+"%")
+		}
+	}
+	return deleted
+}

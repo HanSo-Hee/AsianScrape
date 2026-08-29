@@ -140,7 +140,7 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 		subLine = fmt.Sprintf("🌐 <b>Subtitles:</b> <code>%s</code>\n", item.Subtitles)
 	}
 
-	caption := fmt.Sprintf("📁 <b>File:</b> <code>%s</code>\n🎬 <b>Title:</b> <code>%s</code>\n🔢 <b>Episode:</b> <code>E%02d</code>\n💿 <b>Quality:</b> <code>%s</code>\n%s\n⚡ <b>Uploaded By:</b> @MoviesFlixers_DL", localFilename, showTitle, epNum, quality, subLine)
+	caption := fmt.Sprintf("📁 <b>File:</b> <code>%s</code>\n🎬 <b>Title:</b> <code>%s</code>\n🔢 <b>Episode:</b> <code>E%02d</code>\n💿 <b>Quality:</b> <code>%s</code>\n🔊 <b>Audio:</b> <code>Korean</code>\n%s⚡ <b>Uploaded By:</b> @KDramaZFlix", localFilename, showTitle, epNum, quality, subLine)
 
 	var sentMsg *telegram.NewMessage
 	var uploadErr error

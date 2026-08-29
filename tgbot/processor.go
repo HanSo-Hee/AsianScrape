@@ -169,6 +169,8 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		epLine := ""
 		if len(episodes) == 1 {
 			epLine = fmt.Sprintf("🔢 <b>Episode:</b> <code>E%02d</code>\n", episodes[0].Episode)
+		} else if len(episodes) > 1 {
+			epLine = fmt.Sprintf("🔢 <b>Episodes:</b> <code>E%02d - E%02d</code>\n", episodes[0].Episode, episodes[len(episodes)-1].Episode)
 		}
 
 		statusVal, _ := qualities["_status"].(string)
@@ -177,7 +179,7 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 		statusQuote := fmt.Sprintf("<blockquote>Status: %s</blockquote>\n", statusVal)
 
-		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s%s%s\n👇 <b>Download Episodes via Buttons Below:</b>", showTitle, epLine, subLine, statusQuote)
+		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s🔊 <b>Audio:</b> <code>Korean</code>\n%s%s\n👇 <b>Download Episodes via Buttons Below:</b>\n\n⚡ <b>Uploaded By:</b> @KDramaZFlix", showTitle, epLine, subLine, statusQuote)
 
 		cleanID := regexp.MustCompile(`[^a-zA-Z0-9_]+`).ReplaceAllString(showID, "_")
 		kb := telegram.NewKeyboard()
