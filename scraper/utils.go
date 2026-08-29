@@ -7,16 +7,14 @@
 package scraper
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/PuerkitoBio/goquery"
 )
 
 func getHTML(targetURL string) (string, error) {
@@ -30,150 +28,27 @@ func getHTML(targetURL string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
-
-	return string(bodyBytes), nil
+	return string(body), nil
 }
 
-func postForm(targetURL string, data url.Values) (string, error) {
-	req, err := http.NewRequest("POST", targetURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+func GetShowPageAndSource(inputURL string) (string, string) {
+	lower := strings.ToLower(inputURL)
+	source := "kissasia"
+	if strings.Contains(lower, "dramacool") {
+		source = "dramacool"
+	} else if strings.Contains(lower, "dramakey") {
+		source = "dramakey"
 	}
 
-	return string(bodyBytes), nil
-}
-
-func UnwrapVideoURL(videoURL string) string {
-	if strings.Contains(videoURL, "cdnvideo.autos/media/") || strings.Contains(videoURL, "cdnvideo") {
-		re := regexp.MustCompile(`/media/([A-Za-z0-9+/=]+)(?:\.mp4)?`)
-		match := re.FindStringSubmatch(videoURL)
-		if len(match) > 1 {
-			b64Str := match[1]
-			missingPadding := len(b64Str) % 4
-			if missingPadding > 0 {
-				b64Str += strings.Repeat("=", 4-missingPadding)
-			}
-			decoded, err := base64.StdEncoding.DecodeString(b64Str)
-			if err == nil {
-				decStr := string(decoded)
-				if strings.HasPrefix(decStr, "http") {
-					return decStr
-				}
-			}
-		}
+	cleanURL := inputURL
+	if idx := strings.Index(cleanURL, "#"); idx != -1 {
+		cleanURL = cleanURL[:idx]
 	}
-	return videoURL
-}
-
-func ResolveDownloadwellaLink(urlStr string) string {
-	if !strings.Contains(urlStr, "downloadwella.com") {
-		return urlStr
-	}
-	html, err := getHTML(urlStr)
-	if err != nil {
-		return urlStr
-	}
-
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return urlStr
-	}
-
-	form := doc.Find("form").First()
-	if form.Length() == 0 {
-		return urlStr
-	}
-
-	payload := url.Values{}
-	form.Find("input").Each(func(i int, s *goquery.Selection) {
-		name, _ := s.Attr("name")
-		val, _ := s.Attr("value")
-		if name != "" {
-			payload.Set(name, val)
-		}
-	})
-
-	html2, err := postForm(urlStr, payload)
-	if err != nil {
-		return urlStr
-	}
-
-	doc2, err := goquery.NewDocumentFromReader(strings.NewReader(html2))
-	if err != nil {
-		return urlStr
-	}
-
-	var directLink string
-	doc2.Find("a").Each(func(i int, s *goquery.Selection) {
-		href, _ := s.Attr("href")
-		if strings.HasSuffix(href, ".mkv") || strings.HasSuffix(href, ".mp4") || strings.Contains(href, ".mkv") {
-			directLink = href
-		}
-	})
-
-	if directLink != "" {
-		return directLink
-	}
-	return urlStr
-}
-
-func CleanFilename(filename string) string {
-	extIdx := strings.LastIndex(filename, ".")
-	var base, ext string
-	if extIdx != -1 {
-		base = filename[:extIdx]
-		ext = filename[extIdx:]
-	} else {
-		base = filename
-		ext = ".mp4"
-	}
-
-	reList := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\(Episodes?\s*[\d\s&,-]+\s*Added\)`),
-		regexp.MustCompile(`(?i)\(Episodes?\s*[\d\s&,-]+\s*Complete\)`),
-		regexp.MustCompile(`(?i)\(Complete\)`),
-		regexp.MustCompile(`(?i)\(?dramakey\.com\)?`),
-		regexp.MustCompile(`(?i)\(?kissasia\.biz\)?`),
-		regexp.MustCompile(`(?i)\(?dramacool\.sh\)?`),
-		regexp.MustCompile(`(?i)\(?dramacool\.bg\)?`),
-		regexp.MustCompile(`(?i)\(?moviesflixers_dl\)?`),
-		regexp.MustCompile(`\[.*?\]`),
-	}
-
-	cleaned := base
-	for _, re := range reList {
-		cleaned = re.ReplaceAllString(cleaned, "")
-	}
-
-	reSpace := regexp.MustCompile(`[\._-]`)
-	cleaned = reSpace.ReplaceAllString(cleaned, " ")
-
-	reMultiSpace := regexp.MustCompile(`\s+`)
-	cleaned = strings.TrimSpace(reMultiSpace.ReplaceAllString(cleaned, " "))
-
-	return fmt.Sprintf("%s [@KDramazFlix]%s", cleaned, ext)
+	return cleanURL, source
 }
 
 func CleanShowTitle(title string) string {
@@ -203,19 +78,22 @@ func CleanShowTitle(title string) string {
 	return cleaned
 }
 
-func ExtractEpisodeNumber(filename string) int {
-	re := regexp.MustCompile(`(?i)[Ee](\d+)|episode[s]?[-_\s]?(\d+)|ep[-_\s]?(\d+)`)
-	matches := re.FindStringSubmatch(filename)
+func ExtractEpisodeNumber(text string) int {
+	if text == "" {
+		return 0
+	}
+	reExplicit := regexp.MustCompile(`(?i)\b(?:episodes?|ep|e)[-_\s]?(\d{1,4})\b`)
+	matches := reExplicit.FindStringSubmatch(text)
 	if len(matches) > 1 {
 		for _, m := range matches[1:] {
 			if m != "" {
-				if val, err := strconv.Atoi(m); err == nil {
+				if val, err := strconv.Atoi(m); err == nil && val > 0 {
 					return val
 				}
 			}
 		}
 	}
-	return 1
+	return 0
 }
 
 func detectQualities(links []struct{ text, href string }) map[string]string {
@@ -265,23 +143,19 @@ func ExtractTargetEpisodeNumber(targetURL string) int {
 	return 0
 }
 
-func GetShowPageAndSource(targetURL string) (string, string) {
-	parsed, err := url.Parse(targetURL)
-	if err != nil {
-		return "", ""
-	}
-	host := strings.ToLower(parsed.Host)
-	cleanURL := strings.Split(targetURL, "#")[0]
+func UnwrapVideoURL(raw string) string {
+	return raw
+}
 
-	if strings.Contains(host, "dramakey.com") {
-		return cleanURL, "DramaKey"
-	} else if strings.Contains(host, "kissasia") {
-		return cleanURL, "KissAsia"
-	} else if strings.Contains(host, "dramacool") {
-		if strings.Contains(parsed.Path, "/drama-detail/") {
-			return cleanURL, "DramaCool"
-		}
-		return cleanURL, "DramaCool"
-	}
-	return "", ""
+func ResolveDownloadwellaLink(raw string) string {
+	return raw
+}
+
+func CleanFilename(filename string) string {
+	re := regexp.MustCompile(`[\\/:*?"<>|]`)
+	clean := re.ReplaceAllString(filename, "")
+	clean = strings.TrimSpace(clean)
+	ext := filepath.Ext(clean)
+	base := strings.TrimSuffix(clean, ext)
+	return fmt.Sprintf("%s [@KDramazFlix]%s", base, ext)
 }

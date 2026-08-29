@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -168,16 +167,11 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 				}
 
 				epNum := idx + 1
-				reEp := regexp.MustCompile(`(?i)[Ee](\d+)|episode[s]?[-_\s]?(\d+)|ep[-_\s]?(\d+)`)
-				epMatch := reEp.FindStringSubmatch(line)
-				if len(epMatch) > 1 {
-					for _, m := range epMatch[1:] {
-						if m != "" {
-							if val, err := strconv.Atoi(m); err == nil {
-								epNum = val
-								break
-							}
-						}
+				parts := strings.Split(line, "|")
+				if len(parts) > 0 {
+					extracted := ExtractEpisodeNumber(parts[0])
+					if extracted > 0 {
+						epNum = extracted
 					}
 				}
 
@@ -234,10 +228,19 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		})
 
 		epLinks := make(map[string][]struct{ text, href string })
-		for _, link := range rawLinks {
-			parts := strings.Split(link.href, "/")
-			filename := parts[len(parts)-1]
-			epNum := ExtractEpisodeNumber(filename)
+		for idx, link := range rawLinks {
+			epNum := ExtractEpisodeNumber(link.text)
+			if epNum == 0 {
+				parts := strings.Split(link.href, "/")
+				filename := parts[len(parts)-1]
+				epNum = ExtractEpisodeNumber(filename)
+			}
+			if epNum == 0 {
+				epNum = ExtractEpisodeNumber(link.href)
+			}
+			if epNum == 0 {
+				epNum = idx + 1
+			}
 			epKey := fmt.Sprintf("Episode %02d", epNum)
 			epLinks[epKey] = append(epLinks[epKey], link)
 		}
