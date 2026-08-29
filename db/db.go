@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -21,6 +22,13 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type ScheduledDeletionTask struct {
+	ID       string    `bson:"_id,omitempty" json:"id"`
+	ChatID   int64     `bson:"chat_id" json:"chat_id"`
+	MsgIDs   []int32   `bson:"msg_ids" json:"msg_ids"`
+	DeleteAt time.Time `bson:"delete_at" json:"delete_at"`
+}
+
 type Database struct {
 	useMongo     bool
 	mongoClient  *mongo.Client
@@ -28,6 +36,7 @@ type Database struct {
 	postedCol    *mongo.Collection
 	fileStoreCol *mongo.Collection
 	peerStoreCol *mongo.Collection
+	deletionCol  *mongo.Collection
 	sqliteDB     *sql.DB
 }
 
@@ -48,6 +57,7 @@ func Init(mongoSRV string) {
 				d.postedCol = d.mongoDB.Collection("posted_items")
 				d.fileStoreCol = d.mongoDB.Collection("file_store")
 				d.peerStoreCol = d.mongoDB.Collection("peers")
+				d.deletionCol = d.mongoDB.Collection("scheduled_deletions")
 				log.Println("Connected to MongoDB successfully")
 			}
 		}
@@ -94,6 +104,12 @@ func (d *Database) initSQLite() {
 			id INTEGER PRIMARY KEY,
 			access_hash INTEGER,
 			username TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS scheduled_deletions (
+			id TEXT PRIMARY KEY,
+			chat_id INTEGER,
+			msg_ids TEXT,
+			delete_at DATETIME
 		);`,
 	}
 
@@ -218,4 +234,62 @@ func (d *Database) DeleteShow(fileID string) bool {
 		}
 	}
 	return deleted
+}
+
+func (d *Database) SaveScheduledDeletion(chatID int64, msgIDs []int32, deleteAt time.Time) string {
+	id := fmt.Sprintf("%d_%d", chatID, time.Now().UnixNano())
+	task := ScheduledDeletionTask{
+		ID:       id,
+		ChatID:   chatID,
+		MsgIDs:   msgIDs,
+		DeleteAt: deleteAt,
+	}
+
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = d.deletionCol.InsertOne(ctx, task)
+	} else {
+		msgIDsBytes, _ := json.Marshal(msgIDs)
+		_, _ = d.sqliteDB.Exec("INSERT INTO scheduled_deletions (id, chat_id, msg_ids, delete_at) VALUES (?, ?, ?, ?)", id, chatID, string(msgIDsBytes), deleteAt)
+	}
+	return id
+}
+
+func (d *Database) GetPendingDeletions() []ScheduledDeletionTask {
+	var tasks []ScheduledDeletionTask
+	now := time.Now()
+
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cursor, err := d.deletionCol.Find(ctx, bson.M{"delete_at": bson.M{"$lte": now}})
+		if err == nil {
+			_ = cursor.All(ctx, &tasks)
+		}
+	} else {
+		rows, err := d.sqliteDB.Query("SELECT id, chat_id, msg_ids, delete_at FROM scheduled_deletions WHERE delete_at <= ?", now)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var t ScheduledDeletionTask
+				var msgIDsStr string
+				if err := rows.Scan(&t.ID, &t.ChatID, &msgIDsStr, &t.DeleteAt); err == nil {
+					_ = json.Unmarshal([]byte(msgIDsStr), &t.MsgIDs)
+					tasks = append(tasks, t)
+				}
+			}
+		}
+	}
+	return tasks
+}
+
+func (d *Database) RemoveScheduledDeletion(id string) {
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = d.deletionCol.DeleteOne(ctx, bson.M{"_id": id})
+	} else {
+		_, _ = d.sqliteDB.Exec("DELETE FROM scheduled_deletions WHERE id = ?", id)
+	}
 }

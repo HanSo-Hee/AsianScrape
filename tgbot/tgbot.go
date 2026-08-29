@@ -56,6 +56,8 @@ func StartBot(ctx context.Context) {
 	BotUsername = me.Username
 	log.Printf("Bot successfully started as @%s", BotUsername)
 
+	go StartDeletionScheduler(client)
+
 	VerifyChannels(client)
 
 	if config.Global.ForcesubChannel != "" && config.Global.ForcesubChannel != "0" {

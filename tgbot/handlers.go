@@ -222,14 +222,14 @@ func startHandler(client *telegram.Client, chatID int64, param string) {
 					telegram.Button.URL("Backup Channel", channelLink),
 				).Build()
 
-				warnMsg, err := client.SendMessage(chatID, "<b>Your files will be deleted after 30 Mins forward and save it.</b>", &telegram.SendOptions{
+				warnMsg, err := client.SendMessage(chatID, "<b>Your files will be deleted after 10 Mins. Forward and save it!</b>", &telegram.SendOptions{
 					ReplyMarkup: markup,
 				})
 				if err == nil {
 					sentMsgIDs = append(sentMsgIDs, warnMsg.ID)
 				}
 
-				go deleteMessagesAfterDelay(client, chatID, sentMsgIDs, 30*time.Minute)
+				db.Global.SaveScheduledDeletion(chatID, sentMsgIDs, time.Now().Add(10*time.Minute))
 			}
 			return
 		}
@@ -261,5 +261,20 @@ func deleteShowHandler(client *telegram.Client, chatID int64, param string) {
 		_, _ = client.SendMessage(chatID, fmt.Sprintf("✅ <b>Successfully deleted database records for '%s'!</b>\n\nYou can now send the drama URL to re-scrape and re-upload cleanly.", param))
 	} else {
 		_, _ = client.SendMessage(chatID, fmt.Sprintf("⚠️ <b>No matching database records found for '%s'.</b>", param))
+	}
+}
+
+func StartDeletionScheduler(client *telegram.Client) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		tasks := db.Global.GetPendingDeletions()
+		for _, task := range tasks {
+			if len(task.MsgIDs) > 0 {
+				_, _ = client.DeleteMessages(task.ChatID, task.MsgIDs, true)
+			}
+			db.Global.RemoveScheduledDeletion(task.ID)
+		}
 	}
 }
