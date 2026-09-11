@@ -12,12 +12,30 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 )
 
 type ProgressCallback func(current, total int64, speedBps float64)
 
 func DownloadFileWithProgress(ctx context.Context, urlStr string, filename string, cb ProgressCallback) error {
+	if strings.Contains(strings.ToLower(urlStr), ".m3u8") {
+		cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n", "-i", urlStr, "-c", "copy", filename)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("hls stream download failed: %v (%s)", err, string(output))
+		}
+		fi, err := os.Stat(filename)
+		if err == nil && fi.Size() < 1024 {
+			return fmt.Errorf("downloaded HLS video is empty (%d bytes)", fi.Size())
+		}
+		if cb != nil && err == nil {
+			cb(fi.Size(), fi.Size(), 0)
+		}
+		return nil
+	}
+
 	client := &http.Client{
 		Timeout: 0,
 		Transport: &http.Transport{
