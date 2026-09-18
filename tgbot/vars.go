@@ -7,11 +7,14 @@
 package tgbot
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/amarnathcjd/gogram/telegram"
 )
@@ -20,7 +23,28 @@ var (
 	Client             *telegram.Client
 	BotUsername        string
 	ForcesubInviteLink string
+	BotStartTime       = time.Now()
+	activeTaskCancels  sync.Map
 )
+
+func RegisterTask(chatID int64, cancel context.CancelFunc) {
+	activeTaskCancels.Store(chatID, cancel)
+}
+
+func CancelTask(chatID int64) bool {
+	if val, ok := activeTaskCancels.Load(chatID); ok {
+		if cancel, okFn := val.(context.CancelFunc); okFn {
+			cancel()
+			activeTaskCancels.Delete(chatID)
+			return true
+		}
+	}
+	return false
+}
+
+func UnregisterTask(chatID int64) {
+	activeTaskCancels.Delete(chatID)
+}
 
 func formatSpeed(bytesPerSec float64) string {
 	if bytesPerSec >= 1024*1024 {

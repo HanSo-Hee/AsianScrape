@@ -293,3 +293,83 @@ func (d *Database) RemoveScheduledDeletion(id string) {
 		_, _ = d.sqliteDB.Exec("DELETE FROM scheduled_deletions WHERE id = ?", id)
 	}
 }
+
+func (d *Database) SaveUser(userID int64, username string) {
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		filter := bson.M{"_id": userID}
+		update := bson.M{
+			"$set": bson.M{
+				"username":   username,
+				"updated_at": time.Now(),
+			},
+			"$setOnInsert": bson.M{
+				"created_at": time.Now(),
+			},
+		}
+		opts := options.Update().SetUpsert(true)
+		_, _ = d.peerStoreCol.UpdateOne(ctx, filter, update, opts)
+	} else if d.sqliteDB != nil {
+		_, _ = d.sqliteDB.Exec("INSERT OR REPLACE INTO peers (id, access_hash, username) VALUES (?, 0, ?)", userID, username)
+	}
+}
+
+func (d *Database) GetAllUserIDs() []int64 {
+	var userIDs []int64
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cursor, err := d.peerStoreCol.Find(ctx, bson.M{})
+		if err == nil {
+			defer cursor.Close(ctx)
+			for cursor.Next(ctx) {
+				var u struct {
+					ID int64 `bson:"_id"`
+				}
+				if err := cursor.Decode(&u); err == nil && u.ID > 0 {
+					userIDs = append(userIDs, u.ID)
+				}
+			}
+		}
+	} else if d.sqliteDB != nil {
+		rows, err := d.sqliteDB.Query("SELECT id FROM peers WHERE id > 0")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err == nil && id > 0 {
+					userIDs = append(userIDs, id)
+				}
+			}
+		}
+	}
+	return userIDs
+}
+
+func (d *Database) GetDBStats() (showsCount int64, postedCount int64, pendingDeletions int64, usersCount int64) {
+	if d.useMongo {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if d.fileStoreCol != nil {
+			showsCount, _ = d.fileStoreCol.CountDocuments(ctx, bson.M{})
+		}
+		if d.postedCol != nil {
+			postedCount, _ = d.postedCol.CountDocuments(ctx, bson.M{})
+		}
+		if d.deletionCol != nil {
+			pendingDeletions, _ = d.deletionCol.CountDocuments(ctx, bson.M{})
+		}
+		if d.peerStoreCol != nil {
+			usersCount, _ = d.peerStoreCol.CountDocuments(ctx, bson.M{})
+		}
+	} else if d.sqliteDB != nil {
+		_ = d.sqliteDB.QueryRow("SELECT COUNT(*) FROM file_store").Scan(&showsCount)
+		_ = d.sqliteDB.QueryRow("SELECT COUNT(*) FROM posted_items").Scan(&postedCount)
+		_ = d.sqliteDB.QueryRow("SELECT COUNT(*) FROM scheduled_deletions").Scan(&pendingDeletions)
+		_ = d.sqliteDB.QueryRow("SELECT COUNT(*) FROM peers WHERE id > 0").Scan(&usersCount)
+	}
+	return
+}
+
+

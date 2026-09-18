@@ -33,6 +33,8 @@ func ScrapeShowData(showURL string, source string) (*ShowData, error) {
 		return ScrapeKissAsia(doc, showURL, targetEpNum)
 	case "dramacool":
 		return ScrapeDramaCool(doc, showURL, targetEpNum)
+	case "kdhindidubbed":
+		return ScrapeKDHindiDubbed(doc, showURL, targetEpNum)
 	}
 
 	return nil, fmt.Errorf("unsupported source: %s", source)

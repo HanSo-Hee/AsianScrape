@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,11 +25,20 @@ import (
 )
 
 func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID int32, urlStr string) {
-	var sendOpt *telegram.SendOptions
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	RegisterTask(replyToChatID, cancel)
+	defer UnregisterTask(replyToChatID)
+
+	cancelMarkup := telegram.NewKeyboard().AddRow(
+		telegram.Button.Data("❌ Cancel", fmt.Sprintf("cancel_%d", replyToChatID)),
+	).Build()
+
+	sendOpt := &telegram.SendOptions{
+		ReplyMarkup: cancelMarkup,
+	}
 	if replyToMsgID > 0 {
-		sendOpt = &telegram.SendOptions{
-			ReplyTo: &telegram.InputReplyToMessage{ReplyToMsgID: replyToMsgID},
-		}
+		sendOpt.ReplyTo = &telegram.InputReplyToMessage{ReplyToMsgID: replyToMsgID}
 	}
 
 	statusMsg, err := client.SendMessage(replyToChatID, "<b>Processing link... Please wait.</b>", sendOpt)
@@ -45,14 +55,33 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		return
 	}
 
+	if ctx.Err() != nil {
+		_, _ = client.EditMessage(replyToChatID, statusMsgID, "❌ <b>Process cancelled by user.</b>")
+		return
+	}
+
 	showTitle := showData.Title
 	showID := scraper.CleanShowTitle(showTitle)
 	imgURL := showData.ImgURL
 	episodes := showData.Episodes
 
+	sort.Slice(episodes, func(i, j int) bool {
+		return episodes[i].Episode < episodes[j].Episode
+	})
+
 	_, qualities, found := db.Global.GetFileQualities(showID)
 	if !found {
 		qualities = make(map[string]interface{})
+	}
+
+	audio := showData.Audio
+	if audio == "" {
+		if a, ok := qualities["_audio"].(string); ok {
+			audio = a
+		}
+	}
+	if audio != "" {
+		qualities["_audio"] = audio
 	}
 
 	targetQualities := []string{"480p", "720p", "1080p"}
@@ -110,9 +139,17 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 			var msgID int32
 			var uploadErr error
 			for attempt := 1; attempt <= 5; attempt++ {
-				msgID, uploadErr = downloadAndUploadDocument(client, epItem, q, qURL, showTitle, epNum, imgURL)
+				if ctx.Err() != nil {
+					_, _ = client.EditMessage(replyToChatID, statusMsgID, "❌ <b>Process cancelled by user.</b>")
+					return
+				}
+				msgID, uploadErr = downloadAndUploadDocument(ctx, client, epItem, q, qURL, showTitle, epNum, imgURL, audio)
 				if uploadErr == nil && msgID > 0 {
 					break
+				}
+				if ctx.Err() != nil {
+					_, _ = client.EditMessage(replyToChatID, statusMsgID, "❌ <b>Process cancelled by user.</b>")
+					return
 				}
 				log.Printf("Attempt %d/5 failed for %s E%02d %s: %v. Retrying...", attempt, showTitle, epNum, q, uploadErr)
 				waitTime := parseFloodWait(uploadErr)
@@ -166,11 +203,22 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 			subLine = fmt.Sprintf("🌐 <b>Subtitles:</b> <code>%s</code>\n", subtitles)
 		}
 
+		totalCount := showData.TotalEpisodes
+		if totalCount == 0 {
+			totalCount = len(episodes)
+		}
+
 		epLine := ""
 		if len(episodes) == 1 {
 			epLine = fmt.Sprintf("🔢 <b>Episode:</b> <code>E%02d</code>\n", episodes[0].Episode)
 		} else if len(episodes) > 1 {
-			epLine = fmt.Sprintf("🔢 <b>Episodes:</b> <code>E%02d - E%02d</code>\n", episodes[0].Episode, episodes[len(episodes)-1].Episode)
+			firstEp := episodes[0].Episode
+			lastEp := episodes[len(episodes)-1].Episode
+			if totalCount > 0 {
+				epLine = fmt.Sprintf("🔢 <b>Episodes:</b> <code>E%02d - E%02d</code> (Total %d Episodes)\n", firstEp, lastEp, totalCount)
+			} else {
+				epLine = fmt.Sprintf("🔢 <b>Episodes:</b> <code>E%02d - E%02d</code>\n", firstEp, lastEp)
+			}
 		}
 
 		statusVal, _ := qualities["_status"].(string)
@@ -179,7 +227,12 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		}
 		statusQuote := fmt.Sprintf("<blockquote>Status: %s</blockquote>\n", statusVal)
 
-		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s🔊 <b>Audio:</b> <code>Korean</code>\n%s%s\n👇 <b>Download Episodes via Buttons Below:</b>\n\n⚡ <b>Uploaded By:</b> @KDramaZFlix", showTitle, epLine, subLine, statusQuote)
+		audioLine := ""
+		if audio != "" && !strings.EqualFold(audio, "unknown") {
+			audioLine = fmt.Sprintf("🔊 <b>Audio:</b> <code>%s</code>\n", audio)
+		}
+
+		caption := fmt.Sprintf("🎬 <b>NEW DRAMA RELEASED</b> 🎬\n\n📌 <b>Title:</b> <code>%s</code>\n%s%s%s%s\n👇 <b>Download Episodes via Buttons Below:</b>\n\n⚡ <b>Uploaded By:</b> @KDramaZFlix", showTitle, epLine, audioLine, subLine, statusQuote)
 
 		cleanID := regexp.MustCompile(`[^a-zA-Z0-9_]+`).ReplaceAllString(showID, "_")
 		kb := telegram.NewKeyboard()
@@ -187,11 +240,26 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 		var buttons []telegram.KeyboardButton
 		for _, q := range sortedQs {
 			if _, ok := qualities[q]; ok {
-				botUser := BotUsername
-				if botUser == "" {
-					botUser = "bot"
+				param := fmt.Sprintf("batch_%s_%s", cleanID, q)
+				startURL := ""
+				baseURL := config.Global.BotURL
+				if baseURL == "" {
+					baseURL = config.Global.CloudflareBaseURL
 				}
-				startURL := fmt.Sprintf("https://t.me/%s?start=batch_%s_%s", botUser, cleanID, q)
+				if baseURL != "" {
+					baseURL = strings.TrimRight(baseURL, "?&")
+					if strings.Contains(baseURL, "?") {
+						startURL = fmt.Sprintf("%s&start=%s", baseURL, param)
+					} else {
+						startURL = fmt.Sprintf("%s?start=%s", baseURL, param)
+					}
+				} else {
+					botUser := BotUsername
+					if botUser == "" {
+						botUser = "bot"
+					}
+					startURL = fmt.Sprintf("https://t.me/%s?start=%s", botUser, param)
+				}
 				buttons = append(buttons, telegram.Button.URL("📥 "+q, startURL))
 			}
 		}
@@ -222,7 +290,7 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 				if err == nil {
 					posted = true
 				} else {
-					log.Printf("Failed to edit channel message %d in channel %d: %v", channelMsgID, config.Global.ChannelID, err)
+					log.Printf("Failed to edit channel message %d in channel %s: %v", channelMsgID, config.Global.ChannelID, err)
 				}
 			} else {
 				var sentMsg *telegram.NewMessage
@@ -231,7 +299,6 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 						Caption:     caption,
 						ReplyMarkup: markup,
 					})
-					_ = os.Remove(localImgPath)
 				}
 
 				if sentMsg == nil {
@@ -244,9 +311,27 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 					db.Global.SaveFileQualities(showID, showTitle, qualities)
 					posted = true
 				} else {
-					log.Printf("Failed to post card to channel %d: %v", config.Global.ChannelID, err)
+					log.Printf("Failed to post card to channel %s: %v", config.Global.ChannelID, err)
 				}
 			}
+		}
+
+		if config.Global.LogChannel != "" && config.Global.LogChannel != config.Global.ChannelID {
+			if localImgPath != "" {
+				_, err = client.SendMedia(config.Global.LogChannel, localImgPath, &telegram.MediaOptions{
+					Caption:     caption,
+					ReplyMarkup: markup,
+				})
+			} else {
+				_, err = client.SendMessage(config.Global.LogChannel, caption, &telegram.SendOptions{ReplyMarkup: markup})
+			}
+			if err != nil {
+				log.Printf("Failed to post card to log channel %s: %v", config.Global.LogChannel, err)
+			}
+		}
+
+		if localImgPath != "" {
+			_ = os.Remove(localImgPath)
 		}
 
 		if posted {
@@ -258,19 +343,45 @@ func ProcessUserURL(client *telegram.Client, replyToChatID int64, replyToMsgID i
 
 	if len(allDeliverableMsgIDs) > 0 {
 		deliveredCount := 0
+		var sentMsgIDs []int32
 		for _, mID := range allDeliverableMsgIDs {
 			msgs, err := client.GetMessages(config.Global.LogChannel, &telegram.SearchOption{IDs: []int32{mID}})
 			if err == nil && len(msgs) > 0 {
 				doc := msgs[0].Document()
 				if doc != nil {
-					_, errSend := client.SendMedia(replyToChatID, doc, &telegram.MediaOptions{Caption: msgs[0].Text()})
-					if errSend == nil {
+					sentMsg, errSend := client.SendMedia(replyToChatID, doc, &telegram.MediaOptions{Caption: msgs[0].Text()})
+					if errSend == nil && sentMsg != nil {
+						sentMsgIDs = append(sentMsgIDs, sentMsg.ID)
 						deliveredCount++
 					}
 				}
 			}
 		}
 		_, _ = client.EditMessage(replyToChatID, statusMsgID, fmt.Sprintf("✅ <b>Delivered %d episode file(s) from database archive!</b>", deliveredCount))
+
+		if len(sentMsgIDs) > 0 {
+			delMinutes := config.Global.AutoDeleteMinutes
+			if delMinutes <= 0 {
+				delMinutes = 10
+			}
+			channelLink := os.Getenv("CHANNEL_LINK")
+			if channelLink == "" {
+				channelLink = "https://t.me/KDramazFlix"
+			}
+			markup := telegram.NewKeyboard().AddRow(
+				telegram.Button.URL("Backup Channel", channelLink),
+			).Build()
+
+			warnMsg, errWarn := client.SendMessage(replyToChatID, fmt.Sprintf("<b>Your files will be deleted after %d Mins. Forward and save it!</b>", delMinutes), &telegram.SendOptions{
+				ReplyMarkup: markup,
+			})
+			if errWarn == nil && warnMsg != nil {
+				sentMsgIDs = append(sentMsgIDs, warnMsg.ID)
+			}
+
+			db.Global.SaveScheduledDeletion(replyToChatID, sentMsgIDs, time.Now().Add(time.Duration(delMinutes)*time.Minute))
+			go deleteMessagesAfterDelay(client, replyToChatID, sentMsgIDs, time.Duration(delMinutes)*time.Minute)
+		}
 	} else {
 		_, _ = client.EditMessage(replyToChatID, statusMsgID, "No new or existing episode files available for this query.")
 	}

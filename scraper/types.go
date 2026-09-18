@@ -27,10 +27,12 @@ type Episode struct {
 }
 
 type ShowData struct {
-	Title    string    `json:"title"`
-	Status   string    `json:"status"`
-	ImgURL   string    `json:"img_url"`
-	Episodes []Episode `json:"episodes"`
+	Title         string    `json:"title"`
+	Status        string    `json:"status"`
+	Audio         string    `json:"audio"`
+	TotalEpisodes int       `json:"total_episodes"`
+	ImgURL        string    `json:"img_url"`
+	Episodes      []Episode `json:"episodes"`
 }
 
 var client = &http.Client{

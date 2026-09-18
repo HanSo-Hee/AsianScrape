@@ -11,13 +11,17 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
 func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*ShowData, error) {
-	title := strings.TrimSpace(doc.Find("h1, .wp-block-post-title, .entry-title").First().Text())
+	title := ExtractShowTitle(doc, "")
+	if title == "" || strings.EqualFold(title, "unknown drama") {
+		title = strings.TrimSpace(doc.Find("h1, .wp-block-post-title, .entry-title").First().Text())
+	}
 	if title == "" {
 		title = "Unknown Drama"
 	}
@@ -115,7 +119,8 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		content, _ := contentObj["$t"].(string)
 
 		lines := strings.Split(content, ";")
-		for idx, line := range lines {
+		validEpCounter := 0
+		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
@@ -130,6 +135,9 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 						imgURL = foundImg
 					}
 				}
+				continue
+			}
+			if strings.HasPrefix(line, "$") {
 				continue
 			}
 
@@ -166,12 +174,27 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 					}
 				}
 
-				epNum := idx + 1
-				parts := strings.Split(line, "|")
-				if len(parts) > 0 {
-					extracted := ExtractEpisodeNumber(parts[0])
-					if extracted > 0 {
-						epNum = extracted
+				validEpCounter++
+				epNum := validEpCounter
+				// Extract episode number from subtitle URL first (contains e.g. s01e01)
+				if subtitleURL != "" {
+					if ext := ExtractEpisodeNumber(subtitleURL); ext > 0 {
+						epNum = ext
+					}
+				}
+				if epNum == validEpCounter && len(subParts) >= 3 {
+					if ext := ExtractEpisodeNumber(subParts[2]); ext > 0 {
+						epNum = ext
+					}
+				}
+				if epNum == validEpCounter && len(subParts) > 0 {
+					if ext := ExtractEpisodeNumber(subParts[0]); ext > 0 {
+						epNum = ext
+					}
+				}
+				if epNum == validEpCounter {
+					if ext := ExtractEpisodeNumber(line); ext > 0 {
+						epNum = ext
 					}
 				}
 
@@ -200,18 +223,6 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		}
 	}
 
-	if targetEpNum > 0 && len(episodes) > 0 {
-		var filtered []Episode
-		for _, ep := range episodes {
-			if ep.Episode == targetEpNum {
-				filtered = append(filtered, ep)
-			}
-		}
-		if len(filtered) > 0 {
-			episodes = filtered
-		}
-	}
-
 	if len(episodes) == 0 {
 		var rawLinks []struct{ text, href string }
 		doc.Find(".entry-content a[href], #Play a[href]").Each(func(i int, s *goquery.Selection) {
@@ -227,7 +238,8 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 			}
 		})
 
-		epLinks := make(map[string][]struct{ text, href string })
+		epMap := make(map[int][]struct{ text, href string })
+		var epNumbers []int
 		for idx, link := range rawLinks {
 			epNum := ExtractEpisodeNumber(link.text)
 			if epNum == 0 {
@@ -241,13 +253,17 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 			if epNum == 0 {
 				epNum = idx + 1
 			}
-			epKey := fmt.Sprintf("Episode %02d", epNum)
-			epLinks[epKey] = append(epLinks[epKey], link)
+
+			if _, exists := epMap[epNum]; !exists {
+				epNumbers = append(epNumbers, epNum)
+			}
+			epMap[epNum] = append(epMap[epNum], link)
 		}
 
-		for epKey, links := range epLinks {
-			var epNum int
-			_, _ = fmt.Sscanf(epKey, "Episode %d", &epNum)
+		sort.Ints(epNumbers)
+
+		for _, epNum := range epNumbers {
+			links := epMap[epNum]
 			qualities := detectQualities(links)
 
 			subtitles := ""
@@ -259,6 +275,7 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 				}
 			}
 
+			epKey := fmt.Sprintf("Episode %02d", epNum)
 			episodes = append(episodes, Episode{
 				Episode:   epNum,
 				Title:     fmt.Sprintf("%s - %s", title, epKey),
@@ -269,16 +286,33 @@ func ScrapeKissAsia(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		}
 	}
 
-	status := "Ongoing"
-	docText := strings.ToLower(doc.Text())
-	if strings.Contains(docText, "status: completed") || strings.Contains(docText, "status: complete") || strings.Contains(strings.ToLower(title), "complete") {
-		status = "Completed"
+	sort.Slice(episodes, func(i, j int) bool {
+		return episodes[i].Episode < episodes[j].Episode
+	})
+
+	totalEpisodes := len(episodes)
+
+	if targetEpNum > 0 && len(episodes) > 0 {
+		var filtered []Episode
+		for _, ep := range episodes {
+			if ep.Episode == targetEpNum {
+				filtered = append(filtered, ep)
+			}
+		}
+		if len(filtered) > 0 {
+			episodes = filtered
+		}
 	}
 
+	status := DetectShowStatus(doc, title)
+	audio := DetectAudioLanguage(doc, title, showURL)
+
 	return &ShowData{
-		Title:    title,
-		Status:   status,
-		ImgURL:   imgURL,
-		Episodes: episodes,
+		Title:         title,
+		Status:        status,
+		Audio:         audio,
+		TotalEpisodes: totalEpisodes,
+		ImgURL:        imgURL,
+		Episodes:      episodes,
 	}, nil
 }

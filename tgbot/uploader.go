@@ -21,7 +21,10 @@ import (
 	"github.com/amarnathcjd/gogram/telegram"
 )
 
-func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, quality string, directLink string, showTitle string, epNum int, imgURL string) (int32, error) {
+func downloadAndUploadDocument(ctx context.Context, client *telegram.Client, item scraper.Episode, quality string, directLink string, showTitle string, epNum int, imgURL string, audio string) (int32, error) {
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 	directLink = scraper.UnwrapVideoURL(directLink)
 	if strings.Contains(directLink, "downloadwella.com") {
 		resolved := scraper.ResolveDownloadwellaLink(directLink)
@@ -49,7 +52,7 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 		for idx, track := range item.SubtitleTracks {
 			tSub := fmt.Sprintf("temp_sub_%d_%d.vtt", epNum, idx)
 			tempFiles = append(tempFiles, tSub)
-			errSub := downloader.DownloadSubtitle(context.Background(), track.URL, tSub)
+			errSub := downloader.DownloadSubtitle(ctx, track.URL, tSub)
 			if errSub == nil {
 				subInputs = append(subInputs, downloader.SubtitleInput{
 					Path:     tSub,
@@ -60,7 +63,7 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 	} else if item.SubtitleURL != "" {
 		tSub := fmt.Sprintf("temp_subtitle_%d.vtt", epNum)
 		tempFiles = append(tempFiles, tSub)
-		errSub := downloader.DownloadSubtitle(context.Background(), item.SubtitleURL, tSub)
+		errSub := downloader.DownloadSubtitle(ctx, item.SubtitleURL, tSub)
 		if errSub == nil {
 			subInputs = append(subInputs, downloader.SubtitleInput{
 				Path:     tSub,
@@ -93,7 +96,7 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 
 	if fi, err := os.Stat(localFilename); err != nil || fi.Size() < 1024 {
 		if fiIn, errIn := os.Stat(tempInput); errIn != nil || fiIn.Size() < 1024 {
-			err = downloader.DownloadFileWithProgress(context.Background(), directLink, tempInput, func(current, total int64, speedBps float64) {
+			err = downloader.DownloadFileWithProgress(ctx, directLink, tempInput, func(current, total int64, speedBps float64) {
 				bar := getProgressBar(current, total, speedBps)
 				msgText := fmt.Sprintf("<b>Downloading Episode...</b>\n\n<b>File:</b> <code>%s</code>\n%s", localFilename, bar)
 				_, _ = client.EditMessage(config.Global.LogChannel, logMsgID, msgText)
@@ -101,6 +104,10 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 			if err != nil {
 				return 0, fmt.Errorf("download video failed: %w", err)
 			}
+		}
+
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
 		}
 
 		_, _ = client.EditMessage(config.Global.LogChannel, logMsgID, fmt.Sprintf("<b>Processing video for %s...</b>\n\n<b>File:</b> <code>%s</code>", quality, localFilename))
@@ -112,10 +119,14 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 			targetHeight = 1080
 		}
 
-		err = downloader.ProcessVideoQualityMultiSub(context.Background(), tempInput, subInputs, localFilename, targetHeight)
+		err = downloader.ProcessVideoQualityMultiSub(ctx, tempInput, subInputs, localFilename, targetHeight)
 		if err != nil {
 			return 0, fmt.Errorf("ffmpeg processing failed: %w", err)
 		}
+	}
+
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
 	}
 
 	subLine := ""
@@ -140,7 +151,12 @@ func downloadAndUploadDocument(client *telegram.Client, item scraper.Episode, qu
 		subLine = fmt.Sprintf("🌐 <b>Subtitles:</b> <code>%s</code>\n", item.Subtitles)
 	}
 
-	caption := fmt.Sprintf("📁 <b>File:</b> <code>%s</code>\n🎬 <b>Title:</b> <code>%s</code>\n🔢 <b>Episode:</b> <code>E%02d</code>\n💿 <b>Quality:</b> <code>%s</code>\n🔊 <b>Audio:</b> <code>Korean</code>\n%s⚡ <b>Uploaded By:</b> @KDramaZFlix", localFilename, showTitle, epNum, quality, subLine)
+	audioLine := ""
+	if audio != "" && !strings.EqualFold(audio, "unknown") {
+		audioLine = fmt.Sprintf("🔊 <b>Audio:</b> <code>%s</code>\n", audio)
+	}
+
+	caption := fmt.Sprintf("📁 <b>File:</b> <code>%s</code>\n🎬 <b>Title:</b> <code>%s</code>\n🔢 <b>Episode:</b> <code>E%02d</code>\n💿 <b>Quality:</b> <code>%s</code>\n%s%s⚡ <b>Uploaded By:</b> @KDramaZFlix", localFilename, showTitle, epNum, quality, audioLine, subLine)
 
 	var sentMsg *telegram.NewMessage
 	var uploadErr error

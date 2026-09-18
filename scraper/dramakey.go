@@ -9,23 +9,35 @@ package scraper
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
 func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*ShowData, error) {
-	title := strings.TrimSpace(doc.Find("h1, .entry-title").First().Text())
+	title := ExtractShowTitle(doc, "")
+	if title == "" || strings.EqualFold(title, "unknown drama") {
+		// Fallback to URL slug
+		uParts := strings.Split(strings.Trim(showURL, "/"), "/")
+		if len(uParts) > 0 {
+			slug := uParts[len(uParts)-1]
+			title = CleanShowTitle(strings.ReplaceAll(slug, "-", " "))
+		}
+	}
 	if title == "" {
 		title = "Unknown Drama"
 	}
 
 	imgURL, _ := doc.Find(`meta[property="og:image"]`).Attr("content")
 	if imgURL == "" || strings.Contains(strings.ToLower(imgURL), "logo") {
-		imgURL, _ = doc.Find("img.wp-post-image, .post-thumbnail img, .entry-content img").First().Attr("src")
+		imgURL, _ = doc.Find(`meta[name="twitter:image"]`).Attr("content")
 	}
 	if imgURL == "" || strings.Contains(strings.ToLower(imgURL), "logo") {
-		imgURL, _ = doc.Find("img.wp-post-image, .post-thumbnail img, .entry-content img").First().Attr("data-src")
+		imgURL, _ = doc.Find("img.wp-post-image, .post-thumbnail img, .entry-content img, .elementor-image img").First().Attr("src")
+	}
+	if imgURL == "" || strings.Contains(strings.ToLower(imgURL), "logo") {
+		imgURL, _ = doc.Find("img.wp-post-image, .post-thumbnail img, .entry-content img, .elementor-image img").First().Attr("data-src")
 	}
 	if imgURL != "" && !strings.HasPrefix(imgURL, "http") {
 		base, _ := url.Parse(showURL)
@@ -33,7 +45,9 @@ func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		imgURL = base.ResolveReference(rel).String()
 	}
 
-	epLinks := make(map[string][]struct{ text, href string })
+	epMap := make(map[int][]struct{ text, href string })
+	var epNumbers []int
+
 	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
 		href, _ := s.Attr("href")
 		text := strings.TrimSpace(s.Text())
@@ -46,18 +60,34 @@ func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 
 			parts := strings.Split(href, "/")
 			filename := parts[len(parts)-1]
-			epNum := ExtractEpisodeNumber(filename)
-			epKey := fmt.Sprintf("Episode %02d", epNum)
 
-			epLinks[epKey] = append(epLinks[epKey], struct{ text, href string }{text, href})
+			epNum := ExtractEpisodeNumber(filename)
+			if epNum == 0 {
+				epNum = ExtractEpisodeNumber(href)
+			}
+			if epNum == 0 {
+				epNum = ExtractEpisodeNumber(text)
+			}
+			if epNum == 0 {
+				// Check closest preceding heading
+				prevH := s.ParentsFiltered(".elementor-widget-container, .elementor-element").Prev().Find(".elementor-heading-title, h2, h3, h4").Text()
+				epNum = ExtractEpisodeNumber(prevH)
+			}
+
+			if epNum > 0 {
+				if _, exists := epMap[epNum]; !exists {
+					epNumbers = append(epNumbers, epNum)
+				}
+				epMap[epNum] = append(epMap[epNum], struct{ text, href string }{text, href})
+			}
 		}
 	})
 
-	var episodes []Episode
-	for epKey, links := range epLinks {
-		var epNum int
-		_, _ = fmt.Sscanf(epKey, "Episode %d", &epNum)
+	sort.Ints(epNumbers)
 
+	var episodes []Episode
+	for _, epNum := range epNumbers {
+		links := epMap[epNum]
 		qualities := detectQualities(links)
 		subtitles := ""
 		for _, link := range links {
@@ -68,6 +98,7 @@ func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 			}
 		}
 
+		epKey := fmt.Sprintf("Episode %02d", epNum)
 		episodes = append(episodes, Episode{
 			Episode:   epNum,
 			Title:     fmt.Sprintf("%s - %s", title, epKey),
@@ -76,6 +107,8 @@ func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 			Subtitles: subtitles,
 		})
 	}
+
+	totalEpisodes := len(episodes)
 
 	if targetEpNum > 0 && len(episodes) > 0 {
 		var filtered []Episode
@@ -89,16 +122,15 @@ func ScrapeDramaKey(doc *goquery.Document, showURL string, targetEpNum int) (*Sh
 		}
 	}
 
-	status := "Ongoing"
-	docText := strings.ToLower(doc.Text())
-	if strings.Contains(docText, "status: completed") || strings.Contains(docText, "status: complete") || strings.Contains(strings.ToLower(title), "complete") {
-		status = "Completed"
-	}
+	status := DetectShowStatus(doc, title)
+	audio := DetectAudioLanguage(doc, title, showURL)
 
 	return &ShowData{
-		Title:    title,
-		Status:   status,
-		ImgURL:   imgURL,
-		Episodes: episodes,
+		Title:         title,
+		Status:        status,
+		Audio:         audio,
+		TotalEpisodes: totalEpisodes,
+		ImgURL:        imgURL,
+		Episodes:      episodes,
 	}, nil
 }

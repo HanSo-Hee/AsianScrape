@@ -13,9 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"asianscraper/config"
+	"asianscraper/db"
 
 	"github.com/amarnathcjd/gogram/telegram"
 )
@@ -84,6 +86,14 @@ func StartBot(ctx context.Context) {
 		}
 
 		chatID := message.ChatID()
+		senderID := message.SenderID()
+		if senderID > 0 {
+			username := ""
+			if sender, err := message.GetSender(); err == nil && sender != nil {
+				username = sender.Username
+			}
+			go db.Global.SaveUser(senderID, username)
+		}
 
 		if strings.HasPrefix(text, "/start") {
 			parts := strings.SplitN(text, " ", 2)
@@ -95,7 +105,34 @@ func StartBot(ctx context.Context) {
 			return nil
 		}
 
+		if strings.HasPrefix(text, "/cancel") {
+			if !isSudoUser(senderID) {
+				_, _ = client.SendMessage(chatID, "⚠️ <i>Access denied. This command is restricted to administrators.</i>")
+				return nil
+			}
+			cancelHandler(client, chatID)
+			return nil
+		}
+
+		if strings.HasPrefix(text, "/stats") {
+			if !isSudoUser(senderID) {
+				_, _ = client.SendMessage(chatID, "⚠️ <i>Access denied. This command is restricted to administrators.</i>")
+				return nil
+			}
+			statsHandler(client, chatID)
+			return nil
+		}
+
+		if strings.HasPrefix(text, "/broadcast") || strings.HasPrefix(text, "/bcast") {
+			broadcastHandler(client, message)
+			return nil
+		}
+
 		if strings.HasPrefix(text, "/delete") || strings.HasPrefix(text, "/delshow") || strings.HasPrefix(text, "/del") {
+			if !isSudoUser(senderID) {
+				_, _ = client.SendMessage(chatID, "⚠️ <i>Access denied. This command is restricted to administrators.</i>")
+				return nil
+			}
 			parts := strings.SplitN(text, " ", 2)
 			param := ""
 			if len(parts) > 1 {
@@ -142,11 +179,29 @@ func StartBot(ctx context.Context) {
 		match := urlRegex.FindString(text)
 		if match != "" {
 			urlStr := match
-			if strings.Contains(urlStr, "dramakey.com") || strings.Contains(urlStr, "kissasia") || strings.Contains(urlStr, "dramacool") {
+			if strings.Contains(urlStr, "dramakey.com") || strings.Contains(urlStr, "kissasia") || strings.Contains(urlStr, "dramacool") || strings.Contains(urlStr, "kdhindidubbed") {
 				go ProcessUserURL(client, chatID, message.ID, urlStr)
 			}
 		}
 
+		return nil
+	})
+
+	client.On(telegram.OnCallbackQuery, func(cb *telegram.CallbackQuery) error {
+		data := cb.DataString()
+		if strings.HasPrefix(data, "cancel_") {
+			targetChatStr := strings.TrimPrefix(data, "cancel_")
+			targetChatID, err := strconv.ParseInt(targetChatStr, 10, 64)
+			if err != nil {
+				targetChatID = cb.GetChatID()
+			}
+			if CancelTask(targetChatID) {
+				_, _ = cb.Answer("Task cancelled successfully!", &telegram.CallbackOptions{Alert: true})
+				_, _ = cb.Edit("🛑 <b>Download/Upload cancelled by user.</b>")
+			} else {
+				_, _ = cb.Answer("No active task to cancel or already completed.", &telegram.CallbackOptions{Alert: false})
+			}
+		}
 		return nil
 	})
 

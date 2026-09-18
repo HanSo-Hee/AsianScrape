@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -25,8 +26,11 @@ type Config struct {
 	ForcesubChannel     string
 	ForcesubChannelLink string
 	CloudflareBaseURL   string
+	BotURL              string
 	ButtonUpload        bool
 	CheckInterval       int
+	AutoDeleteMinutes   int
+	SudoUsers           []int64
 }
 
 var Global *Config
@@ -73,6 +77,37 @@ func Load() {
 		checkInterval = val
 	}
 
+	autoDeleteMinutes := 10
+	if val, err := strconv.Atoi(os.Getenv("AUTO_DELETE_MINUTES")); err == nil && val > 0 {
+		autoDeleteMinutes = val
+	}
+
+	botURL := os.Getenv("BOT_URL")
+	if botURL == "" {
+		botURL = os.Getenv("BOT_LINK")
+	}
+	if botURL == "" {
+		botURL = os.Getenv("CLOUDFLARE_BASE_URL")
+	}
+
+	var sudoUsers []int64
+	sudoStr := os.Getenv("SUDO_USERS")
+	if sudoStr == "" {
+		sudoStr = os.Getenv("ADMINS")
+	}
+	if sudoStr == "" {
+		sudoStr = os.Getenv("OWNER_ID")
+	}
+	if sudoStr != "" {
+		for _, part := range strings.FieldsFunc(sudoStr, func(r rune) bool {
+			return r == ',' || r == ' ' || r == ';'
+		}) {
+			if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+				sudoUsers = append(sudoUsers, id)
+			}
+		}
+	}
+
 	Global = &Config{
 		APIID:               apiID,
 		APIHash:             apiHash,
@@ -83,8 +118,12 @@ func Load() {
 		BackupChannel:       backupChannel,
 		ForcesubChannel:     forcesubChannel,
 		ForcesubChannelLink: os.Getenv("FORCESUB_CHANNEL_LINK"),
-		CloudflareBaseURL:   os.Getenv("CLOUDFLARE_BASE_URL"),
+		CloudflareBaseURL:   botURL,
+		BotURL:              botURL,
 		ButtonUpload:        buttonUpload,
 		CheckInterval:       checkInterval,
+		AutoDeleteMinutes:   autoDeleteMinutes,
+		SudoUsers:           sudoUsers,
 	}
 }
+
